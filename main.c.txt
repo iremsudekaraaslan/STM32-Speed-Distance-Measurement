@@ -1,0 +1,182 @@
+#include "main.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+#include <stdlib.h> // abs fonksiyonu icin
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+#define FILTER_SIZE 5 // Filtre hassasiyetini buradan ayarlayabilirsiniz
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+TIM_HandleTypeDef htim3;
+
+UART_HandleTypeDef huart1;
+
+/* USER CODE BEGIN PV */
+volatile uint32_t sure = 0;
+volatile uint16_t mesafe_mm = 0;
+volatile uint16_t eski_mesafe_mm = 0;
+volatile int16_t hiz_mms = 0; // Filtrelenmis nihai hiz
+char gonderilecek_veri[50];
+// --- FILTRE DEGISKENLERI ---
+int16_t hiz_buffer[FILTER_SIZE] = {0}; // Gecmis hiz degerlerini tutan dizi
+uint8_t buffer_index = 0;             // Dizi icindeki sira
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_TIM3_Init(void);
+static void MX_USART1_UART_Init(void);
+/* USER CODE BEGIN PFP */
+
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+void delay_us (uint16_t us)
+{
+    __HAL_TIM_SET_COUNTER(&htim3, 0);
+    while (__HAL_TIM_GET_COUNTER(&htim3) < us);
+}
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+
+  /* USER CODE BEGIN 1 */
+
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_TIM3_Init();
+  MX_USART1_UART_Init();
+  /* USER CODE BEGIN 2 */
+  HAL_TIM_Base_Start(&htim3);
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+	  uint32_t timeout;
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+
+	      // 1. Trigger Pinini Tetikle (10us High)
+	      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);   // PB0 High
+	      delay_us(10);
+	      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET); // PB0 Low
+
+	      // 2. Echo Pinini Bekle
+
+	      while (!HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_1)) // PB1 Low iken bekle
+	      {
+	          timeout++;
+	          if(timeout >30000)
+	          {
+	        	  mesafe_mm=999;
+	        	  goto devam;
+	          }
+
+
+	      }
+
+	      // Echo High oldu, sayacı sıfırla ve ölç
+	      __HAL_TIM_SET_COUNTER(&htim3, 0);
+	      timeout=0;
+
+	      while (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_1)) // PB1 High olduğu sürece bekle
+	      {
+	    	  timeout++;
+	    	  if(timeout >30000)
+
+	    	  {
+	    		  mesafe_mm=999;
+	    		 	        	  goto devam;
+	    		 	          }
+	    	  }
+	      sure = __HAL_TIM_GET_COUNTER(&htim3);        // Süreyi al
+
+
+	      // 3. Mesafeyi Hesapla
+	      if (sure == 0 || sure > 30000)
+	      {
+	          mesafe_mm = 999;
+	      }
+	      else
+	      {
+	          mesafe_mm = sure / 5.8;
+	      }
+	      // 4. Ham Hızı Hesapla
+	      int fark = (int)mesafe_mm - (int)eski_mesafe_mm;
+	      int16_t ham_hiz = fark * 10; // 100ms delay olduğu için 10 ile çarpıyoruz
+
+	      // Mutlak değer al ve sınırla (Ham hız için)
+	      if(ham_hiz < 0) ham_hiz = -ham_hiz;
+	      if(ham_hiz > 999) ham_hiz = 999;
+
+	      // --- FILTRELEME KISMI (Hareketli Ortalama) ---
+	      hiz_buffer[buffer_index] = ham_hiz; // Yeni veriyi diziye ekle
+	      buffer_index++;
+	      if(buffer_index >= FILTER_SIZE) buffer_index = 0; // Dizi sonuna geldiyse başa dön
+
+	      // Ortalamayı Hesapla
+	      int32_t toplam_hiz = 0;
+	      for(int i = 0; i < FILTER_SIZE; i++)
+	      {
+	          toplam_hiz += hiz_buffer[i];
+	      }
+	      hiz_mms = toplam_hiz / FILTER_SIZE; // Ortalama hızı ana değişkene ata
+	      // ---------------------------------------------
+
+	      eski_mesafe_mm = mesafe_mm;
+              devam:
+	      // 5. Veriyi Gönder
+	      // M: Mesafe, H: Hiz (Filtrelenmis)
+	      sprintf(gonderilecek_veri, "H:%03d M:%03d\r\n", hiz_mms, mesafe_mm);
+	      HAL_UART_Transmit(&huart1, (uint8_t*)gonderilecek_veri, strlen(gonderilecek_veri), 100);
+
+	      HAL_Delay(100); // 100 ms bekle
+
+  }
+  /* USER CODE END 3 */
+}
